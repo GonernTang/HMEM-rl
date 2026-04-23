@@ -1,0 +1,169 @@
+# HMEMS Consolidation Training Config
+# Training consolidation agent using verl framework
+
+data:
+  # Custom dataset configuration
+  custom_cls:
+    path: "src/session_based_dataset.py"
+    name: "SessionBasedHMEMSDataset"
+
+  train_files: "data/hmems_session_based/train.jsonl"
+  val_files: "data/hmems_session_based/validation.jsonl"
+
+  # Data processing
+  max_prompt_length: 4096
+  max_response_length: 2048
+  max_start_length: 4096
+  max_obs_length: 512
+
+  # DataLoader settings
+  train_batch_size: 8
+  val_batch_size: 8
+  shuffle: true
+  dataloader_num_workers: 4
+  prompt_key: "prompt"  # Not used for custom dataset
+  reward_fn_key: "data_source"
+
+algorithm:
+  # Use custom session-based GRPO
+  adv_estimator: session_grpo
+
+  # GRPO settings
+  gamma: 1.0
+  lam: 1.0
+  norm_adv_by_std_in_grpo: true
+
+  # KL penalty
+  use_kl_in_reward: true
+  kl_penalty: "low_var_kl"
+
+  # KL control configuration
+  kl_ctrl:
+    type: fixed
+    kl_coef: 0.001
+    horizon: 10000
+
+actor_rollout_ref:
+  model:
+    path: "/root/autodl-tmp/models/Qwen3-1.7B"
+    use_remove_padding: true
+    trust_remote_code: true
+
+  # Hybrid engine config
+  hybrid_engine: true
+
+  actor:
+    # Strategy
+    strategy: fsdp
+
+    # Optimizer settings
+    optim:
+      lr: 1e-6
+      lr_warmup_steps_ratio: 0.05
+      weight_decay: 0.01
+
+    # PPO settings
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 2
+    use_dynamic_bsz: false
+
+    # Loss settings
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: "low_var_kl"
+    loss_agg_mode: "token-mean"
+
+    # FSDP settings
+    fsdp_config:
+      param_offload: true
+      optimizer_offload: true
+      use_remove_padding: true
+
+  rollout:
+    # Rollout settings
+    name: vllm
+    mode: sync
+    n: 1
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+    gpu_memory_utilization: 0.8
+    tensor_model_parallel_size: 1
+
+    # Log prob computation
+    log_prob_micro_batch_size_per_gpu: 1
+
+    # Multi-turn (disabled for consolidation)
+    multi_turn:
+      enable: false
+
+  ref:
+    # Reference policy settings
+    log_prob_micro_batch_size_per_gpu: 1
+    fsdp_config:
+      param_offload: true
+
+critic:
+  # Critic is not used for GRPO
+  strategy: fsdp
+  use_dynamic_bsz: false
+  ppo_mini_batch_size: 8
+  ppo_micro_batch_size_per_gpu: 2
+  optim:
+    lr: 1e-6
+  fsdp_config:
+    param_offload: true
+    optimizer_offload: true
+
+reward_model:
+  # Enable custom reward manager
+  enable: true
+  strategy: fsdp
+
+  # HMEMS Consolidation Reward Manager
+  reward_manager: hmems_consolidation
+
+  # Reward settings
+  qa_weight: 1.0
+  threshold: 0.5  # Binary reward: < 0.5 = 0, >= 0.5 = 1
+
+  # KL settings
+  use_kl_in_reward: true
+  kl_penalty: "low_var_kl"
+
+trainer:
+  # Training settings
+  total_epochs: 5
+  total_training_steps: null  # Computed from epochs
+  nnodes: 1
+  n_gpus_per_node: 8
+  device: "cuda"
+
+  # Checkpointing
+  save_freq: 50
+  default_local_dir: "./checkpoints/hmems_consolidation"
+  remove_previous_ckpt_in_save: false
+  max_actor_ckpt_to_keep: 3
+  max_critic_ckpt_to_keep: 3
+
+  # Validation
+  test_freq: 50
+  val_before_train: true
+  val_only: false
+  val_batch_size: 8
+  logger: ["console"]  # Options: console, wandb, swanlab
+
+  # Logging
+  log_val_generations: 0  # Number of val generations to log
+
+  # Batch balancing
+  balance_batch: true
+
+# Ray settings
+ray_init:
+  num_cpus: null  # Set to null when Ray is already running
+
+# Custom HMEMS settings
+customized_grpo_rollout_n: 16  # Number of samples per prompt for GRPO
+max_turns: 10
+enable_thinking: false

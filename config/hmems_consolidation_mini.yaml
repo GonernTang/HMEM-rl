@@ -1,0 +1,159 @@
+# HMEMS Consolidation Training Config - Minimal Test
+# For verifying complete training flow with minimal resources
+
+data:
+  # Custom dataset configuration
+  custom_cls:
+    path: "src/session_based_dataset.py"
+    name: "SessionBasedHMEMSDataset"
+
+  train_files: "data/hmems_session_based/test_mini.jsonl"
+  val_files: "data/hmems_session_based/val_mini.jsonl"
+
+  # Data processing - minimal sizes
+  max_prompt_length: 1024  # Reduced for faster testing
+  max_response_length: 512  # Reduced
+  max_start_length: 1024
+  max_obs_length: 128
+
+  # DataLoader settings - minimal
+  train_batch_size: 1
+  val_batch_size: 1
+  shuffle: false  # Disable shuffle for debugging
+  dataloader_num_workers: 0  # Single worker
+  prompt_key: "prompt"
+  reward_fn_key: "data_source"
+
+algorithm:
+  # Use custom session-based GRPO
+  adv_estimator: session_grpo
+
+  # GRPO settings
+  gamma: 1.0
+  lam: 1.0
+  norm_adv_by_std_in_grpo: true
+
+  # KL penalty
+  use_kl_in_reward: false  # Disable for simpler test
+  kl_penalty: "low_var_kl"
+
+actor_rollout_ref:
+  model:
+    path: "/root/autodl-tmp/models/Qwen3-1.7B"
+    use_remove_padding: false  # Disable for simpler test
+    trust_remote_code: true
+
+  actor:
+    # Strategy
+    strategy: fsdp
+
+    # Optimizer settings
+    optim:
+      lr: 1e-6
+      lr_warmup_steps_ratio: 0.0  # No warmup for single step
+      weight_decay: 0.01
+
+    # PPO settings - minimal
+    ppo_mini_batch_size: 1
+    ppo_micro_batch_size_per_gpu: 1
+    use_dynamic_bsz: false
+
+    # Loss settings
+    use_kl_loss: false  # Disable for simpler test
+    kl_loss_coef: 0.0
+    kl_loss_type: "low_var_kl"
+    loss_agg_mode: "token-mean"
+
+    # FSDP settings - minimal
+    fsdp_config:
+      param_offload: true
+      optimizer_offload: true
+      use_remove_padding: false
+
+  rollout:
+    # Rollout settings
+    name: vllm
+    mode: sync  # sync mode for simple generation
+    temperature: 0.0  # Greedy for deterministic
+    top_p: 1.0
+    top_k: -1
+    gpu_memory_utilization: 0.3  # Reduced
+    tensor_model_parallel_size: 1
+
+    # Log prob computation
+    log_prob_micro_batch_size_per_gpu: 1
+
+    # Multi-turn (disabled)
+    multi_turn:
+      enable: false
+
+  ref:
+    # Reference policy settings
+    log_prob_micro_batch_size_per_gpu: 1
+    fsdp_config:
+      param_offload: true
+
+critic:
+  # Critic is not used for GRPO
+  strategy: fsdp
+  use_dynamic_bsz: false
+  ppo_mini_batch_size: 1
+  ppo_micro_batch_size_per_gpu: 1
+  optim:
+    lr: 1e-6
+  fsdp_config:
+    param_offload: true
+    optimizer_offload: true
+
+reward_model:
+  # Enable custom reward manager
+  enable: true
+  strategy: fsdp
+
+  # HMEMS Consolidation Reward Manager
+  reward_manager: hmems_consolidation
+
+  # Reward settings
+  qa_weight: 1.0
+  threshold: 0.5  # Binary reward
+
+  # KL settings
+  use_kl_in_reward: false
+  kl_penalty: "low_var_kl"
+
+trainer:
+  # Training settings - minimal for test
+  total_epochs: 1
+  total_training_steps: 1  # Only 1 step
+  nnodes: 1
+  n_gpus_per_node: 1  # Only 1 GPU for test
+  device: "cuda"
+
+  # Checkpointing - save immediately
+  save_freq: 1
+  default_local_dir: "./checkpoints/hmems_consolidation_test"
+  remove_previous_ckpt_in_save: false
+  max_actor_ckpt_to_keep: 1
+  max_critic_ckpt_to_keep: 1
+
+  # Validation
+  test_freq: 1  # Validate every step
+  val_before_train: true
+  val_only: false
+  val_batch_size: 1
+  logger: ["console"]
+
+  # Logging
+  log_val_generations: 1  # Log generations for debugging
+
+  # Batch balancing
+  balance_batch: false  # Disable for minimal test
+
+# Ray settings - minimal (Ray is already running, so no init needed)
+ray_init:
+  num_cpus: null
+
+# Custom HMEMS settings
+customized_grpo_rollout_n: 2  # Only 2 samples for minimal test
+max_turns: 10
+enable_thinking: false
