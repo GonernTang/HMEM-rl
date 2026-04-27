@@ -1,7 +1,7 @@
 from typing import List, Tuple, Optional, Dict
 from src.vector_store.naive_store import NaiveStore
 from src.episodic_memory import EpisodicNote
-from src.prompt import MEMORY_AUGMENT_PROMPT, MEMORY_AUGMENT_MERGE_PROMPT
+from src.prompt import MEMORY_AUGMENT_PROMPT, MEMORY_AUGMENT_MERGE_PROMPT, CONSOLIDATION_DECISION_PROMPT
 from openai import OpenAI
 from src.token_monitor import TokenMonitor, OPType
 import os
@@ -190,3 +190,91 @@ class NaiveAugMem:
             return False, ""
 
         return True, new_mem
+
+    def decide_consolidation_action(
+        self,
+        new_memory: str,
+        new_memory_embedding: np.ndarray,
+        retrieved_episodic_memories: List[Tuple[int, str, float]],
+        retrieved_vec_memories: List[Tuple[int, str, float]],
+    ) -> Dict[str, any]:
+        """
+        Use LLM to decide consolidation action (merge/augment/none) based on context.
+
+        This replaces the hardcoded threshold-based decision logic with LLM-based reasoning.
+
+        Args:
+            new_memory: The new conversation memory to consolidate
+            new_memory_embedding: Embedding of the new memory (unused, kept for API compatibility)
+            retrieved_episodic_memories: List of (id, content, score) tuples from episodic search
+            retrieved_vec_memories: List of (id, content, score) tuples from vector search
+
+        Returns:
+            Dict with keys:
+                - action: "merge" | "augment" | "none"
+                - reasoning: brief explanation
+                - target_episodic_id: int (for merge)
+                - relevant_vec_ids: list of int (for augment)
+                - merged_content: str (for merge)
+                - augmented_content: str (for augment)
+        """
+        # Format retrieved memories for the prompt
+        episodic_context = ""
+        if retrieved_episodic_memories:
+            episodic_context = "=== Existing Episodic Memories ===\n"
+            for i, (mem_id, content, score) in enumerate(retrieved_episodic_memories):
+                episodic_context += f"[{i}] (id: {mem_id}, score: {score:.2f}) {content}\n\n"
+
+        vec_context = ""
+        if retrieved_vec_memories:
+            vec_context = "=== Relevant Vector Memories ===\n"
+            for i, (mem_id, content, score) in enumerate(retrieved_vec_memories):
+                vec_context += f"[{i}] (id: {mem_id}, score: {score:.2f}) {content}\n\n"
+
+        user_content = f"""=== New Memory to Consolidate ===
+{new_memory}
+
+{episodic_context}
+{vec_context}
+
+Remember: Make your decision based on topic coherence and whether the memories are thematically related.
+- MERGE if new memory relates to an existing episodic memory topic (use target_episodic_id from the list)
+- AUGMENT if 3+ vector memories are thematically related (but don't match existing episodic) (use relevant_vec_ids from the list)
+- NONE if no relevant memories exist
+
+Important: Use the list indices [0, 1, 2, ...] for target_episodic_id and relevant_vec_ids."""
+
+        response = self.openai_client.chat.completions.create(
+            model=os.getenv("MODEL1"),
+            messages=[
+                {"role": "system", "content": CONSOLIDATION_DECISION_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.0,
+        )
+
+        if self.monitor is not None:
+            self.monitor.record_usage_from_raw(response.usage, OPType.MEMORY_MERGE)
+
+        content = response.choices[0].message.content
+        response_json = self._safe_extract_json(content, context="decide_consolidation_action")
+
+        if not response_json:
+            logger.warning(f"Failed to parse consolidation decision, defaulting to 'none'")
+            return {"action": "none", "reasoning": "Parse error, defaulting to none"}
+
+        # Convert list indices to actual memory IDs
+        action = response_json.get("action", "none")
+        if action == "merge":
+            idx = response_json.get("target_episodic_id", 0)
+            if 0 <= idx < len(retrieved_episodic_memories):
+                response_json["target_episodic_id"] = retrieved_episodic_memories[idx][0]
+        elif action == "augment":
+            indices = response_json.get("relevant_vec_ids", [])
+            actual_ids = []
+            for idx in indices:
+                if 0 <= idx < len(retrieved_vec_memories):
+                    actual_ids.append(retrieved_vec_memories[idx][0])
+            response_json["relevant_vec_ids"] = actual_ids
+
+        return response_json

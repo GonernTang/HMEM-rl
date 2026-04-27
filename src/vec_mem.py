@@ -12,6 +12,7 @@ from mem0.embeddings.openai import OpenAIEmbedding
 from src.vector_store.flat_index import FlatIndex
 from src.aug_methods.aug_config import AugConfig
 from src.aug_methods.naive_aug import NaiveAugMem
+from src.episodic_memory import EpisodicNote
 from src.semantic_memory import SemanticMemory
 from typing import List, Dict, Tuple, Optional, Any
 from conv_loader import *
@@ -418,27 +419,113 @@ class VecMem:
 
     def add_memory(self, conv_embedding: np.ndarray, conv: str):
         """
-        Add memory to the system. Find all similar memories, update counters,
-        and batch upgrade memories that exceed aug_thresh to mem0.
+        Add memory to the system using LLM-based consolidation decision.
+
+        This replaces the hardcoded threshold-based logic with LLM reasoning
+        to decide between merge/augment/none actions.
         """
         if self.token_monitor is not None:
             self.token_monitor.record_message()
-        # Step 1: Search from the augmented memory
-        decide_to_merge, new_episodic = self.aug_mem.try_merge_new_memory(
-            conv, conv_embedding, self.merge_with_aug_thresh
-        )
-        if decide_to_merge:
-            if self.enable_semantic_memory:
-                semantic_memories: List[str] = self._generate_semantic_memories(
-                    new_episodic, conv, is_new_episodic=False
-                )
-                self.semantic_memory.add_memories(semantic_memories)
-            return
-        # If no need to merge,Search from the flat vec store
-        scores_local, indices_local = self.vec_store.search(
+
+        # Step 1: Retrieve memories from both stores
+        # Search episodic memories (aug_mem) - returns (content, score)
+        aug_raw_results = self.aug_mem.search_only(conv, limit=self.retrieve_aug_topk)
+        # Convert to (id, content, score) - use index as id since episodic doesn't have stable IDs
+        aug_results: List[Tuple[int, str, float]] = [
+            (i, content, float(score)) for i, (content, score) in enumerate(aug_raw_results)
+        ]
+
+        # Search vector memories (flat store)
+        vec_scores, vec_indices = self.vec_store.search(
             conv_embedding, self.retrieve_raw_topk
         )
-        self._memory_augment(indices_local, scores_local, conv, conv_embedding)
+        vec_results: List[Tuple[int, str, float]] = []
+        for score, vec_id in zip(vec_scores, vec_indices):
+            if vec_id in self._payload_mapping:
+                vec_results.append((int(vec_id), self._payload_mapping[vec_id], float(score)))
+
+        # Step 2: Let LLM decide consolidation action
+        decision = self.aug_mem.decide_consolidation_action(
+            new_memory=conv,
+            new_memory_embedding=conv_embedding,
+            retrieved_episodic_memories=aug_results,
+            retrieved_vec_memories=vec_results,
+        )
+
+        action = decision.get("action", "none")
+
+        # Step 3: Execute the decided action
+        if action == "merge":
+            target_id = decision.get("target_episodic_id", 0)
+            merged_content = decision.get("merged_content", "")
+            if merged_content:
+                # Update the episodic memory with merged content
+                try:
+                    past_note = self.aug_mem.get_episodic_note(target_id)
+                    if past_note:
+                        # Remove old episodic
+                        self.aug_mem.vec_store.remove([target_id])
+                        # Add merged memory
+                        self.aug_mem.vec_store.add(
+                            np.array(self.embeder.embed(merged_content)),
+                            merged_content,
+                            self.aug_mem.id_counter
+                        )
+                        self.aug_mem.raw_store[self.aug_mem.id_counter] = EpisodicNote(
+                            merged_content, [target_id]
+                        )
+                        self.aug_mem.id_counter += 1
+                        # Generate semantic memories
+                        if self.enable_semantic_memory:
+                            semantic_memories = self._generate_semantic_memories(
+                                merged_content, conv, is_new_episodic=False
+                            )
+                            self.semantic_memory.add_memories(semantic_memories)
+                        logger.info(f"Merged memory into episodic {target_id}")
+                except Exception as e:
+                    logger.warning(f"Error during merge execution: {e}")
+                    # Fall through to store as raw
+                    action = "none"
+
+        elif action == "augment":
+            relevant_ids = decision.get("relevant_vec_ids", [])
+            augmented_content = decision.get("augmented_content", "")
+            if augmented_content and relevant_ids:
+                try:
+                    # Add new episodic memory
+                    self.aug_mem.vec_store.add(
+                        np.array(self.embeder.embed(augmented_content)),
+                        augmented_content,
+                        self.aug_mem.id_counter
+                    )
+                    self.aug_mem.raw_store[self.aug_mem.id_counter] = EpisodicNote(
+                        augmented_content, relevant_ids
+                    )
+                    self.aug_mem.id_counter += 1
+                    # Remove consumed vector memories
+                    self.vec_store.remove(np.array(relevant_ids))
+                    for vec_id in relevant_ids:
+                        if vec_id in self._payload_mapping:
+                            del self._payload_mapping[vec_id]
+                    # Generate semantic memories
+                    if self.enable_semantic_memory:
+                        semantic_memories = self._generate_semantic_memories(
+                            augmented_content, conv, is_new_episodic=True
+                        )
+                        self.semantic_memory.add_memories(semantic_memories)
+                    logger.info(f"Augmented new episodic with {len(relevant_ids)} raw memories")
+                except Exception as e:
+                    logger.warning(f"Error during augment execution: {e}")
+                    # Fall through to store as raw
+                    action = "none"
+
+        # Step 4: Default - store as raw vector memory
+        if action == "none":
+            new_memory_id = self.id_assigner
+            self.vec_store.add(conv_embedding, new_memory_id)
+            self._payload_mapping[new_memory_id] = conv
+            self.id_assigner += 1
+            logger.info(f"Stored new memory as raw vector")
 
     def _generate_semantic_memories(
         self, aug_memory: str, raw_conv: str, is_new_episodic: bool
