@@ -1,12 +1,19 @@
 """
-HMEMS Consolidation Agent Standalone Training Script
+HMEMS Consolidation Agent Training Entry Point
 
-This script provides a simplified training interface that:
-1. Loads the HMEMS dataset
-2. Initializes the consolidation manager
-3. Runs GRPO training using verl
+This script is the main entry point for training the HMEMS consolidation agent.
+It generates a configuration JSON and then launches the actual training.
 
-For full distributed training, use: bash scripts/train_hmems_grpo.sh
+Usage:
+    # Generate config and train locally (for testing):
+    python train_consolidation.py --train_data data/hmems_consolidation/train.jsonl ...
+
+    # For full distributed training with Ray:
+    bash scripts/train_consolidation.sh
+
+Note:
+    The actual training is performed by run_hmems_training.py which uses verl.
+    This script only generates the configuration.
 """
 
 import os
@@ -14,24 +21,15 @@ import sys
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Any
 
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
 
 # Add verl to path
-VERL_PATH = Path(__file__).parent.parent / "verl"
+VERL_PATH = Path(__file__).parent / "Mem-alpha" / "verl"
 if VERL_PATH.exists():
     sys.path.insert(0, str(VERL_PATH))
-
-from src.hmems_dataset import HMEMSConsolidationDataset, hmems_collate_fn
-from src.hmems_generation import (
-    HMEMSGenerationManager,
-    ConsolidationGenerationConfig,
-    create_hmems_generation_manager,
-)
-from src.hmems_reward_manager import HMEMSConsolidationRewardManager
 
 
 def parse_args():
@@ -83,7 +81,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_config(args) -> Dict[str, Any]:
+def build_config(args) -> dict:
     """Build verl-compatible config from args."""
     return {
         "data": {
@@ -170,7 +168,7 @@ def build_config(args) -> Dict[str, Any]:
     }
 
 
-def print_training_info(args, config):
+def print_training_info(args):
     """Print training configuration."""
     print("=" * 60)
     print("HMEMS Consolidation Agent Training")
@@ -212,7 +210,7 @@ def main():
 
     # Build config
     config = build_config(args)
-    print_training_info(args, config)
+    print_training_info(args)
 
     # Save config for reproducibility
     config_path = Path(args.checkpoint_dir) / f"{args.model_name}_config.json"
@@ -222,23 +220,17 @@ def main():
     print(f"\nConfig saved to {config_path}")
 
     print("\n" + "=" * 60)
-    print("IMPORTANT: For full distributed training with Ray cluster,")
-    print("use the following command:")
+    print("To run training:")
     print()
-    print(f"  bash scripts/train_hmems_grpo.sh {args.compression_ratio_weight}")
+    print("  1. Start consolidation server:")
+    print("     python consolidation_server.py --port 5005")
     print()
-    print("This script is for local testing only.")
+    print("  2. Run training (single GPU):")
+    print("     bash scripts/train_consolidation_single_gpu.sh")
+    print()
+    print("  3. Or run distributed training:")
+    print("     bash scripts/train_consolidation.sh")
     print("=" * 60)
-
-    # For local testing, we would need to:
-    # 1. Initialize verl's actor/rollout/ref workers
-    # 2. Set up the data loader
-    # 3. Run the GRPO training loop
-    #
-    # See verl/trainer/main_ppo.py for the full implementation
-
-    print("\nFor local testing, start the consolidation server first:")
-    print("  python consolidation_server.py --port 5005")
 
 
 if __name__ == "__main__":
