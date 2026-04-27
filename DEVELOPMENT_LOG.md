@@ -1301,3 +1301,60 @@ GRPO 标准化后的 advantage 平均值为 0 是**正常设计**，不是 bug�
 - 支持更灵活的记忆合并策略
 
 **commit**: `7e91718` - Refactor consolidation decision from rule-based to LLM-based
+
+---
+
+## 日期
+2026/04/27
+
+## 代码整理：简化训练入口
+
+**背景**：
+训练代码入口文件混乱，存在大量重复文件：
+- `train_hmems.py` 和 `src/train_hmems_standalone.py` 功能重复
+- `train_hmems_session.py` 和其他 session-based 入口重复
+- 脚本目录命名不一致
+
+**整理方案**：
+
+1. **统一训练入口**：
+   - `train_consolidation.py` - Consolidation 训练配置生成
+   - `train_session.py` - Session-based 训练配置生成
+
+2. **删除重复文件**：
+   - `train_hmems.py`（由 `train_consolidation.py` 替代）
+   - `train_hmems_session.py`（由 `train_session.py` 替代）
+   - `src/train_hmems_standalone.py`（重复）
+
+3. **重命名脚本**：
+   - `train_hmems_grpo.sh` → `train_consolidation.sh`
+   - `train_hmems_session.sh` → `train_session.sh`
+   - `train_hmems_single_gpu.sh` → `train_session_single_gpu.sh`
+   - 删除 `train_hmems_consolidation.sh`（重复）
+
+4. **重命名配置**：
+   - `config/hmems_merged.yaml` → `config/hmems_session.yaml`
+
+**整理后的结构**：
+```
+顶层入口（配置生成）：
+├── train_consolidation.py  # Consolidation 训练
+├── train_session.py        # Session-based 训练
+
+真正训练入口：
+├── run_hmems_training.py        # Consolidation 训练（verl）
+├── run_hmems_session_training.py # Session-based 训练（RayHMEMSTrainer）
+
+scripts/：
+├── train_consolidation.sh       # 分布式 consolidation 训练
+├── train_session.sh            # 分布式 session-based 训练
+├── train_session_single_gpu.sh  # 单 GPU session-based 训练
+└── quick_gradient_test.sh       # 快速梯度测试
+
+config/：
+├── hmems_session.yaml      # Session-based 训练配置
+├── hmems_consolidation.yaml # Consolidation 训练配置
+└── ...
+```
+
+**commit**: `407dd77` - refactor: simplify training entry points
