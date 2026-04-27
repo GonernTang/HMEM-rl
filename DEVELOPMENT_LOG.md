@@ -1252,3 +1252,52 @@ GRPO 标准化后的 advantage 平均值为 0 是**正常设计**，不是 bug�
 - 这意味着相对于均值的偏离程度
 - Policy gradient 会根据这个相对表现来更新策略
 
+---
+
+## 日期
+2026/04/27
+
+## 功能更新
+
+### Consolidation Agent 提示词重新设计与 LLM 决策
+
+**背景**：
+原来的 consolidation decision 使用硬编码阈值规则：
+- Merge: episodic similarity >= 0.85
+- Augment: vec similarity >= 0.7 且 count >= 3
+- None: 其他情况
+
+**改进方案**：
+1. 重新设计 `CONSOLIDATION_DECISION_PROMPT`：
+   - 角色改为 "Personal Information Organizer"
+   - 核心原则：Topic Coherence、Information Independence、Temporal Accuracy
+   - 决策指南：先检查情节记忆相关性，再检查原始记忆数量
+   - 强调主题一致性和时间准确性
+
+2. 在 `naive_aug.py` 添加 `decide_consolidation_action()` 方法：
+   - 使用 LLM 根据主题一致性判断是否 merge
+   - 使用 LLM 根据主题相关性判断是否 augment
+   - 自动将 LLM 返回的索引转换为实际的内存 ID
+
+3. 修改 `vec_mem.py` 的 `add_memory()` 方法：
+   - 原来：硬编码阈值 `try_merge_new_memory()` + `_memory_augment()`
+   - 现在：检索记忆 → 调用 LLM 决策 → 执行操作
+
+**修改的文件**：
+- `src/prompt.py`:
+  - `CONSOLIDATION_DECISION_PROMPT` - 完全重写
+  - `CONSOLIDATION_DECISION_WITH_QA_PROMPT` - 同步更新
+
+- `src/aug_methods/naive_aug.py`:
+  - 添加 `decide_consolidation_action()` 方法
+  - 使用 `CONSOLIDATION_DECISION_PROMPT` 让 LLM 决策
+
+- `src/vec_mem.py`:
+  - 修改 `add_memory()` 使用 LLM 决策替代硬编码阈值
+
+**预期效果**：
+- 更智能的 consolidation 决策（基于语义理解而非简单阈值）
+- 主题一致性成为决策的主要依据
+- 支持更灵活的记忆合并策略
+
+**commit**: `7e91718` - Refactor consolidation decision from rule-based to LLM-based
