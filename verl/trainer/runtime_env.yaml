@@ -1,0 +1,9 @@
+working_dir: /root/autodl-tmp/memoryrl/Mem-alpha
+excludes: ["/.git/", "/__pycache__/", "*.pyc", "data/hmems_turn_based/", "data/hmems_consolidation/", "logs/", "*.log", "train_output.log", "memory_server.log", "outputs/", "wandb/", "tensorboard_dir/", "rollout_data/"]
+env_vars:
+  TORCH_NCCL_AVOID_RECORD_STREAMS: "1"
+  PYTHONPATH: "/root/autodl-tmp/memoryrl:/root/autodl-tmp/memoryrl/Mem-alpha:/root/autodl-tmp/memoryrl/Mem-alpha/verl"
+  OPENAI_API_KEY: "sk-8df0848b28d94066a0f03ea5b388e74c"
+  OPENAI_BASE_URL: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  # If you are using vllm<=0.6.3, you might need to set the following environment variable to avoid bugs:
+  # VLLM_ATTENTION_BACKEND: "XFORMERS"
